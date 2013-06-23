@@ -102,29 +102,34 @@ char			**devices;
 
 void usage(char *str)
 {
+	char buf[1024];
+
 	fprintf(stderr, "Usage: \n");
 	fprintf(stderr, "\t%s [OPTIONS] [PATHS]\n\n", str);
 	
 	fprintf(stderr, "Summary of OPTIONS: \n");
 	
-	fprintf(stderr, "\t-p <pattern>\tIO data pattern\n");
+	fprintf(stderr, "\t%-20s\t%s\n", "-p <pattern>", "IO data pattern");
 	
-	fprintf(stderr, "\t-n <# processes>\tNumber of threads (for each path) "
-				"for parallel IO.\n");
+	fprintf(stderr, "\t%-20s\t%s\n", "-n <# processes>",
+			"Number of threads (for each path) for parallel IO.");
 	
-	fprintf(stderr, "\t-i <# iterations>\tInterations for IO. (1)\n");
+	fprintf(stderr, "\t%-20s\t%s\n", "-i <# iterations>",
+			"Interations for IO. (1)");
 
-	fprintf(stderr, "\t-s <# seconds>\tNumber of seconds to run.\n");
+	fprintf(stderr, "\t%-20s\t%s\n", "-s <# seconds>",
+			"Number of seconds to run.");
 	
-	fprintf(stderr, "\t-b <block size>\tBlock size for IO. (%d)\n",
-				IO_BLOCK_SIZE);
+	sprintf(buf, "Block size for IO. (%d)", IO_BLOCK_SIZE);
+	fprintf(stderr, "\t%-20s\t%s\n", "-b <block size>", buf);
 
-	fprintf(stderr, "\t-R\tRandom IOs\n");
+	fprintf(stderr, "\t%-20s\t%s\n", "-R", "Random IOs");
 
-	fprintf(stderr, "\t-E <engine>\tIO engine to use. "
-				"Either sync or psync. (psync).\n");
+	fprintf(stderr, "\t%-20s\t%s\n", "-E <engine>",
+			"IO engine to use. Either sync or psync. (psync).");
 
-	fprintf(stderr, "\t-S <size>\tDevice size in GB. (10)\n");
+	fprintf(stderr, "\t%-20s\t%s\n", "-S <size>",
+			"Device size in GB. (10)");
 
 	fprintf(stderr, "\n");
 }
