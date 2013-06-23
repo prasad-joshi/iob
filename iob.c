@@ -131,6 +131,8 @@ void usage(char *str)
 	fprintf(stderr, "\t%-20s\t%s\n", "-S <size>",
 			"Device size in GB. (10)");
 
+	fprintf(stderr, "\t%-20s\t%s\n", "-V", "Verify written data.");
+
 	fprintf(stderr, "\n");
 }
 
@@ -302,8 +304,10 @@ int do_io(struct thread_data *td)
 			continue;
 
 		/* verify the written data */
-		for (b = sb; b <= eb; b++) {
-			if (ioengine->read_block(fd, lb, b, block_size) < 0) {
+		for (i = 0; i < blocks; i++) {
+			if (ioengine->read_block(fd, lb, r_b[i],
+						block_size) < 0) {
+				fprintf(stderr, "Reading block failed.\n");
 				return -1;
 			}
 
