@@ -78,9 +78,6 @@ struct result_data {
 	unsigned long long	total_write_latency;
 	unsigned long long	total_read_latency;
 
-	unsigned long long	write_max_latency;
-	unsigned long long	write_min_latency;
-
 	unsigned long		writes;
 	unsigned long		reads;
 
@@ -290,8 +287,6 @@ int do_io(struct thread_data *td)
 	rd->writes = 0;
 	rd->total_read_latency = 0;
 	rd->reads = 0;
-	rd->write_max_latency = 0;
-	rd->write_min_latency = 0;
 
 	while (!use_iteration || iterations) {
 
@@ -307,16 +302,6 @@ int do_io(struct thread_data *td)
 		d  = get_hrtime(clk_id) - s;
 		rd->total_write_latency += d;
 		rd->writes += blocks;
-
-		if (rd->write_max_latency)
-			rd->write_max_latency = MAX(rd->write_max_latency, d);
-		else
-			rd->write_max_latency = d;
-
-		if (rd->write_min_latency)
-			rd->write_min_latency = MIN(rd->write_min_latency, d);
-		else
-			rd->write_min_latency = d;
 
 		if (iterations > 0)
 			iterations--;
@@ -376,6 +361,7 @@ int main(int argc, char *argv[])
 	unsigned long long	write_latency, read_latency;
 	unsigned long long	read_bw, write_bw;
 	unsigned long long	w_max_l, w_min_l;
+	unsigned long long	all_w_max_lat, all_w_min_lat, all_w_bw;
 
 	program		= argv[0];
 	pattern		= NULL;
@@ -622,7 +608,10 @@ int main(int argc, char *argv[])
 
 	printf("Finished\n");
 
-	rd = (struct result_data *) shm;
+	all_w_bw	= 0;	/* Write BW combining all paths */
+	all_w_min_lat	= 0;	/* Write Minimum latency for all paths */
+	all_w_max_lat	= 0;	/* Write Maximum latency for all paths */
+	rd		= (struct result_data *) shm;
 	for (d = 0; d < no_devices; d++) {
 		avg_write_latency	= 0;
 		avg_read_latency	= 0;
@@ -632,8 +621,8 @@ int main(int argc, char *argv[])
 		read_latency		= 0;
 		read_bw			= 0;
 		write_bw		= 0;
-		w_min_l			= rd->write_min_latency;
-		w_max_l			= rd->write_max_latency;
+		w_min_l			= 0;
+		w_max_l			= 0;
 
 		for (i = 0; i < procs; i++) {
 			assert (d == rd->device_index);
@@ -644,11 +633,19 @@ int main(int argc, char *argv[])
 			read_latency  += rd->total_read_latency;
 			total_reads   += rd->reads;
 
-			w_max_l = MAX(w_max_l, rd->write_max_latency);
-			w_min_l = MIN(w_min_l, rd->write_min_latency);
+			w_max_l = MAX(w_max_l, rd->total_write_latency);
+
+			if (w_min_l)
+				w_min_l = MIN(w_min_l, rd->total_write_latency);
+			else
+				w_min_l = rd->total_write_latency;
 
 			rd++;
 		}
+
+		/* convert to per block */
+		w_min_l = w_min_l / p_blocks;
+		w_max_l = w_max_l / p_blocks;
 
 		printf("\n\nDevice = %s\n", devices[d]);
 
@@ -672,11 +669,22 @@ int main(int argc, char *argv[])
 		printf("Read BW  = %llu MB\n", read_bw);
 
 		printf("avg_write_latency = %lld\n", avg_write_latency);
-		printf("Min Latency = %llu, Max Latency = %lld, Difference = "
-				"%lld\n", w_min_l, w_max_l, w_max_l - w_min_l);
+		printf("Lat Min = %lld, Lat Max = %lld\n", w_min_l, w_max_l);
 		printf("Write BW = %llu MB\n", write_bw);
+
+		/* all path combined calculations */
+		all_w_bw += write_bw;
+		if (all_w_min_lat)
+			all_w_min_lat = MIN(all_w_min_lat, w_min_l);
+		else
+			all_w_min_lat = w_min_l;
+		all_w_max_lat = MAX(all_w_max_lat, w_max_l);
 	}
 
+	printf("\nAll devices combined stats: \n");
+	printf("BW = %llu\n", all_w_bw);
+	printf("Lat Min = %llu\n", all_w_min_lat);
+	printf("Lat Max = %llu\n", all_w_max_lat);
 error:
 	if (shm)
 		shmdt(shm);
