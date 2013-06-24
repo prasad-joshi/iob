@@ -58,6 +58,12 @@
 #define SEC_TO_MICRO	((10ULL * 10ULL * 10ULL) * (SEC_TO_MILLI))
 #define SEC_TO_NS	((10ULL * 10ULL * 10ULL) * (SEC_TO_MICRO))
 
+#undef MIN
+#define MIN(a, b)	((a) > (b) ? (b) : (a))
+
+#undef MAX
+#define MAX(a, b)	((a) > (b) ? (a) : (b))
+
 extern struct ioengine sync_engine;
 extern struct ioengine psync_engine;
 
@@ -71,6 +77,9 @@ char *buf;
 struct result_data {
 	unsigned long long	total_write_latency;
 	unsigned long long	total_read_latency;
+
+	unsigned long long	write_max_latency;
+	unsigned long long	write_min_latency;
 
 	unsigned long		writes;
 	unsigned long		reads;
@@ -251,7 +260,7 @@ int do_io(struct thread_data *td)
 	char			lb[block_size + 1];
 
 	unsigned long long s;
-	unsigned long long e;
+	unsigned long long d;
 
 	sb		= td->start_block;
 	eb		= td->end_block;
@@ -281,21 +290,33 @@ int do_io(struct thread_data *td)
 	rd->writes = 0;
 	rd->total_read_latency = 0;
 	rd->reads = 0;
+	rd->write_max_latency = 0;
+	rd->write_min_latency = 0;
+
 	while (!use_iteration || iterations) {
 
 		s  = get_hrtime(clk_id);
 		/* write blocks */
 		for (i = 0; i < blocks; i++) {
-			if (ioengine->write_block(fd, buf, r_b[i], block_size) < 0) {
-				e  = get_hrtime(clk_id);
-				rd->total_write_latency += (e - s);
-				rd->writes += i;
+			if (ioengine->write_block(fd, buf, r_b[i],
+						block_size) < 0) {
+				fprintf(stderr, "Writing block failed.\n");
 				return -1;
 			}
 		}
-		e  = get_hrtime(clk_id);
-		rd->total_write_latency += (e - s);
+		d  = get_hrtime(clk_id) - s;
+		rd->total_write_latency += d;
 		rd->writes += blocks;
+
+		if (rd->write_max_latency)
+			rd->write_max_latency = MAX(rd->write_max_latency, d);
+		else
+			rd->write_max_latency = d;
+
+		if (rd->write_min_latency)
+			rd->write_min_latency = MIN(rd->write_min_latency, d);
+		else
+			rd->write_min_latency = d;
 
 		if (iterations > 0)
 			iterations--;
@@ -354,6 +375,7 @@ int main(int argc, char *argv[])
 	unsigned long long	avg_write_latency, avg_read_latency;
 	unsigned long long	write_latency, read_latency;
 	unsigned long long	read_bw, write_bw;
+	unsigned long long	w_max_l, w_min_l;
 
 	program		= argv[0];
 	pattern		= NULL;
@@ -610,6 +632,9 @@ int main(int argc, char *argv[])
 		read_latency		= 0;
 		read_bw			= 0;
 		write_bw		= 0;
+		w_min_l			= rd->write_min_latency;
+		w_max_l			= rd->write_max_latency;
+
 		for (i = 0; i < procs; i++) {
 			assert (d == rd->device_index);
 
@@ -618,6 +643,9 @@ int main(int argc, char *argv[])
 
 			read_latency  += rd->total_read_latency;
 			total_reads   += rd->reads;
+
+			w_max_l = MIN(w_max_l, rd->write_max_latency);
+			w_min_l = MAX(w_min_l, rd->write_min_latency);
 
 			rd++;
 		}
@@ -644,6 +672,8 @@ int main(int argc, char *argv[])
 		printf("Read BW  = %llu MB\n", read_bw);
 
 		printf("avg_write_latency = %lld\n", avg_write_latency);
+		printf("Min Latency = %llu, Max Latency = %lld, Difference = "
+				"%lld\n", w_min_l, w_max_l, w_max_l - w_min_l);
 		printf("Write BW = %llu MB\n", write_bw);
 	}
 
