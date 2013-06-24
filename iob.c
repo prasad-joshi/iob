@@ -644,8 +644,8 @@ int main(int argc, char *argv[])
 			read_latency  += rd->total_read_latency;
 			total_reads   += rd->reads;
 
-			w_max_l = MIN(w_max_l, rd->write_max_latency);
-			w_min_l = MAX(w_min_l, rd->write_min_latency);
+			w_max_l = MAX(w_max_l, rd->write_max_latency);
+			w_min_l = MIN(w_min_l, rd->write_min_latency);
 
 			rd++;
 		}
