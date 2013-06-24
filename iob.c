@@ -362,6 +362,7 @@ int main(int argc, char *argv[])
 	unsigned long long	read_bw, write_bw;
 	unsigned long long	w_max_l, w_min_l;
 	unsigned long long	all_w_max_lat, all_w_min_lat, all_w_bw;
+	unsigned long long	all_w_avg_lat;
 
 	program		= argv[0];
 	pattern		= NULL;
@@ -611,6 +612,7 @@ int main(int argc, char *argv[])
 	all_w_bw	= 0;	/* Write BW combining all paths */
 	all_w_min_lat	= 0;	/* Write Minimum latency for all paths */
 	all_w_max_lat	= 0;	/* Write Maximum latency for all paths */
+	all_w_avg_lat	= 0;	/* Write Average latency for all paths  */
 	rd		= (struct result_data *) shm;
 	for (d = 0; d < no_devices; d++) {
 		avg_write_latency	= 0;
@@ -679,12 +681,14 @@ int main(int argc, char *argv[])
 		else
 			all_w_min_lat = w_min_l;
 		all_w_max_lat = MAX(all_w_max_lat, w_max_l);
+		all_w_avg_lat += avg_write_latency;
 	}
 
 	printf("\nAll devices combined stats: \n");
 	printf("BW = %llu\n", all_w_bw);
 	printf("Lat Min = %llu\n", all_w_min_lat);
 	printf("Lat Max = %llu\n", all_w_max_lat);
+	printf("Lat Avg = %llu\n", all_w_avg_lat / no_devices);
 error:
 	if (shm)
 		shmdt(shm);
