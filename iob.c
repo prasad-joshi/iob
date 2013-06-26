@@ -587,7 +587,7 @@ int main(int argc, char *argv[])
 				return 0;
 			}
 
-			pids[i] = pid;
+			pids[d * no_devices + i] = pid;
 		}
 	}
 
@@ -603,7 +603,7 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	for (i = 0; i < procs; i++) {
+	for (i = 0; i < no_devices * procs; i++) {
 		waitpid(pids[i], NULL, 0);
 	}
 
