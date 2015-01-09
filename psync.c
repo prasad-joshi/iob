@@ -28,6 +28,10 @@
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
+#include <inttypes.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include "ioengine.h"
 
 static int read_block(int fd, void *buf, unsigned long block,
