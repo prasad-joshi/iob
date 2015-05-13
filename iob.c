@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <malloc.h>
 #include <errno.h>
 
 #include <sys/types.h>
@@ -72,8 +73,6 @@ struct ioengine *engines[] = {
 	&psync_engine,
 };
 
-char *buf;
-
 struct result_data {
 	unsigned long long	total_write_latency;
 	unsigned long long	total_read_latency;
@@ -115,7 +114,7 @@ void usage(char *str)
 	
 	fprintf(stderr, "Summary of OPTIONS: \n");
 	
-	fprintf(stderr, "\t%-20s\t%s\n", "-p <pattern>", "IO data pattern");
+	fprintf(stderr, "\t%-20s\t%s\n", "-d", "Direct IO");
 	
 	fprintf(stderr, "\t%-20s\t%s\n", "-n <# processes>",
 			"Number of threads (for each path) for parallel IO.");
@@ -150,22 +149,77 @@ void *mempcpy(void *dest, const void *src, size_t n)
 }
 #endif
 
-void fill_buf(char *buf, unsigned long buf_size, char *pattern)
+int is_power_of_4K(unsigned long no)
 {
-	int l = strlen(pattern);
-	char *p;
-	int i;
+	int count;
 
-	p = buf;
-	while (((p - buf) + l) < buf_size) {
-		p = mempcpy(p, pattern, l);
+	/*
+	 * Number must be power of 2
+	 * Atmost 1 bit must be 1
+	 * Position of on bit must be > 12
+	 */
+
+	/* is power of two */
+	if (no & (no - 1)) {
+		return 0;
 	}
 
-	i = 0;
-	while ((p - buf) < buf_size) {
-		*p = pattern[i++];
-		p++;
+	count = 0;
+	while (no) {
+		no = no >> 1;
+		count++;
 	}
+
+	if (count >= 12) {
+		return 1;
+	}
+	return 0;
+}
+
+static ssize_t safe_read(int fd, char *buf, size_t nbytes)
+{
+        ssize_t rc;
+        size_t  bc;
+
+        bc = 0;
+        while (nbytes) {
+                rc = read(fd, buf, nbytes);
+                if (rc < 0) {
+                        if (errno == EINTR) {
+                                continue;
+                        }
+
+                        perror("read ");
+                        break;
+                }
+
+                bc     += rc;
+                buf    += rc;
+                nbytes -= rc;
+        }
+
+        return bc;
+}
+
+static int fill_random_buffer(char *buf, size_t nbytes)
+{
+        int     fd;
+        ssize_t rc;
+
+        fd = open("/dev/urandom", O_RDONLY);
+        if (fd < 0) {
+                perror("open ");
+                return -1;
+        }
+
+        rc = safe_read(fd, buf, nbytes);
+        if (rc != nbytes) {
+                close(fd);
+                return -1;
+        }
+
+        close(fd);
+        return 0;
 }
 
 struct ioengine *get_ioengine(const char *name)
@@ -254,11 +308,17 @@ int do_io(struct thread_data *td)
 	unsigned long		block_size = td->block_size;
 
 	unsigned long		b;
-	char			lb[block_size + 1];
+	char			*lb;
+	char			*buf;
+	int			j;
 
 	unsigned long long s;
 	unsigned long long d;
 
+	buf = memalign(IO_BLOCK_SIZE, block_size);
+	assert(buf);
+
+	lb  = NULL;
 	sb		= td->start_block;
 	eb		= td->end_block;
 	iterations	= td->iterations;
@@ -271,6 +331,7 @@ int do_io(struct thread_data *td)
 	blocks		= eb - sb + 1;
 	r_b_size	= sizeof(*r_b) * blocks;
 	r_b		= malloc(r_b_size);
+	assert(r_b);
 	memset(r_b, 0, r_b_size);
 
 	init_rand_range(&ir, sb, eb);
@@ -284,11 +345,12 @@ int do_io(struct thread_data *td)
 	}
 
 	rd->total_write_latency = 0;
-	rd->writes = 0;
-	rd->total_read_latency = 0;
-	rd->reads = 0;
+	rd->writes              = 0;
+	rd->total_read_latency  = 0;
+	rd->reads               = 0;
 
 	while (!use_iteration || iterations) {
+		fill_random_buffer(buf, block_size);
 
 		s  = get_hrtime(clk_id);
 		/* write blocks */
@@ -309,27 +371,38 @@ int do_io(struct thread_data *td)
 		if (!td->verify)
 			continue;
 
+		if (!lb) {
+			lb = (char *) memalign(IO_BLOCK_SIZE, block_size);
+			assert(lb);
+		}
 		/* verify the written data */
-		for (i = 0; i < blocks; i++) {
-			if (ioengine->read_block(fd, lb, r_b[i],
-						block_size) < 0) {
-				fprintf(stderr, "Reading block failed.\n");
-				return -1;
-			}
+		for (j = 0; j < 2; j++) {
+			printf("Running verification: %d\n", j);
+			for (i = 0; i < blocks; i++) {
+				rc = ioengine->read_block(fd, lb, r_b[i], block_size);
+				if (rc < 0) {
+					fprintf(stderr, "Reading block failed.\n");
+					return -1;
+				}
 
-			if (memcmp(lb, buf, block_size)) {
-				printf("Possible Data Corruption\n");
+				rc = memcmp(lb, buf, block_size);
+				if (rc) {
+					printf("Possible Data Corruption j = %d\n", j);
+					exit(1);
+				}
 			}
 		}
 	}
 
+	free(buf);
+	free(lb);
 	return 0;
 }
 
 int main(int argc, char *argv[])
 {
 	char		*program;	/* program name */
-	char		*pattern;	/* pattern for IO */
+	int		direct;		/* set when direct IO */
 	int		procs;		/* number of processes */
 	unsigned long	seconds;	/* number of seconds to run */
 	unsigned long	iterations;	/* number of iterations */
@@ -339,6 +412,7 @@ int main(int argc, char *argv[])
 	char		*s_engine;	/* IO Engine name */
 	int		opt;
 	int		no_devices;
+	int		open_flags;
 
 	int			dev_size_gb;	/* device sizre in GB */
 	unsigned long long	dev_size;	/* device size in bytes */
@@ -365,7 +439,7 @@ int main(int argc, char *argv[])
 	unsigned long long	all_w_avg_lat;
 
 	program		= argv[0];
-	pattern		= NULL;
+	direct		= 0;
 	procs		= 1;	/* default only one process */
 	seconds		= 0;
 	iterations	= 1;	/* default: only one iteration */
@@ -375,11 +449,12 @@ int main(int argc, char *argv[])
 	s_engine	= NULL;
 	ioengine	= &psync_engine; /* default: psync io engine */
 	dev_size_gb	= 10;		/* default: 10 GB */
+	open_flags	= O_RDWR;
 
-	while ((opt = getopt(argc, argv, "p:n:s:i:Vb:RE:S:")) != -1) {
+	while ((opt = getopt(argc, argv, "dn:s:i:Vb:RE:S:h")) != -1) {
 		switch (opt) {
-		case 'p': /* pattern */
-			pattern = strdup(optarg);
+		case 'd': /* direct IO */
+			direct = 1;
 			break;
 		case 'n': /* number of processes */
 			procs = atoi(optarg);
@@ -405,12 +480,27 @@ int main(int argc, char *argv[])
 		case 'S': /* device size in GB */
 			dev_size_gb = atoi(optarg);
 			break;
+		case 'h':
+			usage(program);
+			return 0;
 		}
 	}
 
 	if (optind == argc) {
 		usage(program);
 		return 1;
+	}
+
+	if (direct && !is_power_of_4K(block_size)) {
+		fprintf(stderr, "Direct IO must have block size in multiple "
+					"of 4096\n");
+		return 1;
+	}
+
+	if (direct) {
+		open_flags |= O_DIRECT;
+	} else {
+		open_flags |= O_SYNC;
 	}
 
 	clk_id = get_clock_id();
@@ -457,11 +547,6 @@ int main(int argc, char *argv[])
 		procs = MAX_PROCESSES / no_devices;
 	}
 
-	if (!pattern) {
-		/* use default pattern */
-		pattern = "[Hello, World!]";
-	}
-
 	/* verify device paths */
 	for (i = 0; i < no_devices; i++) {
 		struct stat buf;
@@ -499,7 +584,6 @@ int main(int argc, char *argv[])
 
 	memset(shm, 0, shm_size);
 
-
 #if 0
 	dev_size = 0;
 	block_size = 0;
@@ -524,7 +608,7 @@ int main(int argc, char *argv[])
 	close(dfd);
 #endif
 
-	dev_size	= dev_size_gb * 1024ULL * 1024ULL * 1024ULL;
+	dev_size	= dev_size_gb * 1024ULL * 1024ULL ; //* 1024ULL;
 	blocks   	= dev_size / block_size;
 	p_blocks 	= blocks / procs;
 
@@ -533,17 +617,14 @@ int main(int argc, char *argv[])
 	printf("Device Blocks = %lu\n", blocks);
 	printf("Blocks Per Process = %lu\n", p_blocks);
 
-	buf = malloc(block_size + 1);
-	if (!buf) {
-		fprintf(stderr, "malloc failed: %s.", strerror(errno));
-		goto error;
-	}
-	memset(buf, 0, block_size + 1);
-	fill_buf(buf, block_size, pattern);
-	buf[block_size + 1] = 0;
 
 	for (d = 0; d < no_devices; d++) {
 		for (i = 0; i < procs; i++) {
+			struct thread_data td;
+			struct result_data *rd;
+			char               *device;
+			int                dfd;
+
 			start_block = i * p_blocks;
 			end_block   = start_block + p_blocks - 1;
 
@@ -551,43 +632,38 @@ int main(int argc, char *argv[])
 			if (pid < 0) {
 				fprintf(stderr, "fork failed: %s\n", strerror(errno));
 				goto error;
+			} else if (pid) {
+				pids[d * no_devices + i] = pid;
+				continue;
 			}
 
-			if (pid == 0) {
-				struct thread_data td;
-				struct result_data *rd;
-				char *device;
-				int dfd;
+			/* child process */
 
-				device = devices[d];
-
-				dfd = open(device, O_RDWR, O_SYNC);
-				if (dfd < 0) {
-					fprintf(stderr, "open(%s) failed: %s\n", device, strerror(errno));
-					return 1;
-				}
-
-				/* shared memory attached before fork() are shared by child. No need to reattach */
-				rd = (struct result_data *) (shm + (sizeof(struct result_data) * ((procs * d) + i)));
-				rd->device_index = d;
-
-				td.start_block	= start_block;
-				td.end_block	= end_block;
-				td.block_size	= block_size;
-				td.iterations	= iterations;
-				td.fd		= dfd;
-				td.result	= rd;
-				td.verify	= verify;
-				td.random	= random;
-				td.clk_id	= clk_id;
-				td.ioengine	= ioengine;
-
-				do_io(&td);
-				close(dfd);
-				return 0;
+			device = devices[d];
+			dfd    = open(device, open_flags);
+			if (dfd < 0) {
+				fprintf(stderr, "open(%s) failed: %s\n", device, strerror(errno));
+				return 1;
 			}
 
-			pids[d * no_devices + i] = pid;
+			/* shared memory attached before fork() are shared by child. No need to reattach */
+			rd = (struct result_data *) shm + ((procs * d) + i);
+			rd->device_index = d;
+
+			td.start_block	= start_block;
+			td.end_block	= end_block;
+			td.block_size	= block_size;
+			td.iterations	= iterations;
+			td.fd		= dfd;
+			td.result	= rd;
+			td.verify	= verify;
+			td.random	= random;
+			td.clk_id	= clk_id;
+			td.ioengine	= ioengine;
+
+			do_io(&td);
+			close(dfd);
+			return 0;
 		}
 	}
 
@@ -595,7 +671,7 @@ int main(int argc, char *argv[])
 		unsigned long s = seconds;
 
 		/* sleep for specified time */
-		while ((s = sleep(s)));
+		sleep(s);
 
 		/* send kill signal to all children */
 		for (i = 0; i < procs; i++) {
