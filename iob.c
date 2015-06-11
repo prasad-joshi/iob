@@ -291,6 +291,7 @@ unsigned long long get_hrtime(int clk_id)
 
 int do_io(struct thread_data *td)
 {
+	int			rc;
 	unsigned long		sb;
 	unsigned long		eb;
 	unsigned long		iterations;
